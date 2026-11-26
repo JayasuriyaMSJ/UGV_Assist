@@ -32,6 +32,7 @@ class _RobotControllerState extends State<RobotController> {
 
   double _lastSentLinear = 0.0;
   double _lastSentAngular = 0.0;
+  int _idleZeroTicks = 0;
 
   bool _advertised = false;
   bool _exiting = false;
@@ -94,14 +95,27 @@ class _RobotControllerState extends State<RobotController> {
 
     final currentLinear = _linearSpeed * _speedMultiplier;
     final currentAngular = _angularSpeed * _speedMultiplier;
+    final isZero = currentLinear == 0.0 && currentAngular == 0.0;
 
-    // Skip if nothing changed (but always send zeros)
-    const threshold = 0.01;
-    if ((currentLinear - _lastSentLinear).abs() < threshold &&
-        (currentAngular - _lastSentAngular).abs() < threshold &&
-        currentLinear != 0.0 &&
-        currentAngular != 0.0) {
-      return;
+    if (isZero) {
+      final wasZero = _lastSentLinear == 0.0 && _lastSentAngular == 0.0;
+      if (wasZero) {
+        _idleZeroTicks++;
+        // After sending 3 stop frames, drop idle zero-Twist to 1 Hz keepalive
+        // (every 20th 50ms tick) instead of flooding 20 Hz when untouched.
+        if (_idleZeroTicks > 3 && _idleZeroTicks % 20 != 0) {
+          return;
+        }
+      } else {
+        _idleZeroTicks = 1;
+      }
+    } else {
+      _idleZeroTicks = 0;
+      const threshold = 0.01;
+      if ((currentLinear - _lastSentLinear).abs() < threshold &&
+          (currentAngular - _lastSentAngular).abs() < threshold) {
+        return;
+      }
     }
 
     _lastSentLinear = currentLinear;

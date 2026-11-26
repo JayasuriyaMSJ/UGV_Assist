@@ -154,11 +154,22 @@ class LocalizationProgressEvent {
 class RobotApiService {
   final RobotConfig robot;
   final Duration timeout;
+  final HttpClient _client;
+  bool _disposed = false;
 
   RobotApiService(
     this.robot, {
     this.timeout = const Duration(seconds: 5),
-  });
+  }) : _client = HttpClient()
+         ..connectionTimeout = timeout
+         ..idleTimeout = const Duration(seconds: 15);
+
+  /// Closes the underlying pooled [HttpClient] and idle keep-alive sockets.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _client.close(force: true);
+  }
 
   Uri _uri(String path, [Map<String, String>? query]) {
     return Uri(
@@ -171,49 +182,39 @@ class RobotApiService {
   }
 
   Future<dynamic> _getJson(String path, [Map<String, String>? query]) async {
-    final client = HttpClient()..connectionTimeout = timeout;
-    try {
-      final req = await client.getUrl(_uri(path, query)).timeout(timeout);
-      final res = await req.close().timeout(timeout);
-      final body = await res.transform(utf8.decoder).join().timeout(timeout);
-      final decoded = jsonDecode(body);
-      if (res.statusCode >= 400) {
-        final msg = decoded is Map
-            ? (decoded['message'] ?? decoded['error'] ?? 'HTTP ${res.statusCode}')
-            : 'HTTP ${res.statusCode}';
-        throw HttpException('$msg');
-      }
-      return decoded;
-    } finally {
-      client.close();
+    final req = await _client.getUrl(_uri(path, query)).timeout(timeout);
+    final res = await req.close().timeout(timeout);
+    final body = await res.transform(utf8.decoder).join().timeout(timeout);
+    final decoded = jsonDecode(body);
+    if (res.statusCode >= 400) {
+      final msg = decoded is Map
+          ? (decoded['message'] ?? decoded['error'] ?? 'HTTP ${res.statusCode}')
+          : 'HTTP ${res.statusCode}';
+      throw HttpException('$msg');
     }
+    return decoded;
   }
 
   Future<Map<String, dynamic>> _postJson(
     String path, [
     Map<String, dynamic>? body,
   ]) async {
-    final client = HttpClient()..connectionTimeout = timeout;
-    try {
-      final req = await client.postUrl(_uri(path)).timeout(timeout);
-      req.headers.contentType = ContentType.json;
-      if (body != null) {
-        req.write(jsonEncode(body));
-      }
-      final res = await req.close().timeout(timeout);
-      final raw = await res.transform(utf8.decoder).join().timeout(timeout);
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map<String, dynamic>) {
-        throw HttpException('Unexpected response (${res.statusCode})');
-      }
-      if (res.statusCode >= 400) {
-        final msg = decoded['message'] ?? decoded['error'] ?? 'HTTP ${res.statusCode}';
-        throw HttpException('$msg');
-      }
-      return decoded;
-    } finally {
-      client.close();
+    final req = await _client.postUrl(_uri(path)).timeout(timeout);
+    req.headers.contentType = ContentType.json;
+    if (body != null) {
+      req.write(jsonEncode(body));
     }
+    final res = await req.close().timeout(timeout);
+    final raw = await res.transform(utf8.decoder).join().timeout(timeout);
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) {
+      throw HttpException('Unexpected response (${res.statusCode})');
+    }
+    if (res.statusCode >= 400) {
+      final msg = decoded['message'] ?? decoded['error'] ?? 'HTTP ${res.statusCode}';
+      throw HttpException('$msg');
+    }
+    return decoded;
   }
 
   Future<SystemStats> getSystemStats() async {

@@ -133,14 +133,19 @@ class FakeRosbridgeService extends RosbridgeService {
 }
 
 class FakeRobotApiService extends RobotApiService {
+  int statsCalls = 0;
+
   FakeRobotApiService(super.robot);
 
   @override
-  Future<SystemStats> getSystemStats() async => const SystemStats(
-        cpuPercent: 24.5,
-        ramPercent: 51.2,
-        diskFreeGb: 42.8,
-      );
+  Future<SystemStats> getSystemStats() async {
+    statsCalls++;
+    return const SystemStats(
+      cpuPercent: 24.5,
+      ramPercent: 51.2,
+      diskFreeGb: 42.8,
+    );
+  }
 
   @override
   Future<List<DockerContainerInfo>> getDockerContainers() async => const [
@@ -389,19 +394,28 @@ void main() {
         expect(find.text('/ugv_03/odom'), findsOneWidget);
         expect(find.text('/ugv_03/cmd_vel_nav'), findsNothing);
 
-        // Switch to Control & Info tab and verify dynamic port button
+        // Switch to Control & Info tab and verify dynamic port button + on-demand subpages
         await tester.tap(find.text('Control & Info'));
         await tester.pumpAndSettle();
         expect(find.text('System Telemetry'), findsOneWidget);
         expect(find.text('Port 5000'), findsOneWidget);
         expect(find.text('24.5%'), findsOneWidget);
+        expect(find.text('Robot Stack Control'), findsOneWidget);
         expect(find.text('slam_localization'), findsOneWidget);
+        expect(find.text('Map DBs & Localization Mode'), findsNothing);
+        expect(find.text('warehouse.db'), findsNothing);
+
+        // Open Sensor URDF Offsets sub-page on demand
         await tester.scrollUntilVisible(
-          find.text('warehouse.db'),
+          find.text('Sensor URDF Offsets'),
           200,
           scrollable: find.byType(Scrollable).last,
         );
-        expect(find.text('warehouse.db'), findsOneWidget);
+        await tester.tap(find.text('Sensor URDF Offsets'));
+        await tester.pumpAndSettle();
+        expect(find.text('lidar_joint'), findsOneWidget);
+        await tester.tap(find.byIcon(Icons.arrow_back).last);
+        await tester.pumpAndSettle();
       },
     );
 
@@ -460,5 +474,70 @@ void main() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
+
+    testWidgets(
+      'Control & Info tab is lazy-loaded only when selected',
+      (tester) async {
+        final fakeService = FakeRosbridgeService();
+        final testRobot = RobotConfig(
+          name: 'UGV-03',
+          ip: '192.168.3.66',
+          port: 9090,
+          namespace: '/ugv_03',
+        );
+        final fakeApi = FakeRobotApiService(testRobot);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: RobotWorkspacePage(
+              robot: testRobot,
+              service: fakeService,
+              apiService: fakeApi,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(fakeApi.statsCalls, 0);
+
+        await tester.tap(find.text('Control & Info'));
+        await tester.pumpAndSettle();
+
+        expect(fakeApi.statsCalls, 1);
+      },
+    );
+
+    testWidgets(
+      'RobotController throttles idle zero-Twist instead of spamming 20 Hz',
+      (tester) async {
+        final fakeService = FakeRosbridgeService();
+        final testRobot = RobotConfig(
+          name: 'UGV-03',
+          ip: '192.168.3.66',
+          port: 9090,
+          namespace: '/ugv_03',
+        );
+        await fakeService.connect(testRobot);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: RobotController(
+              service: fakeService,
+              robot: testRobot,
+              topic: '/ugv_03/cmd_vel_nav',
+            ),
+          ),
+        );
+
+        // Advance 600ms (12 ticks at 50ms): should send only 3 stop frames, not 12.
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(fakeService.publishedTwists.length, lessThanOrEqualTo(4));
+
+        // Advance another 1000ms (20 ticks): 1 Hz keepalive adds at most 1 frame.
+        final before = fakeService.publishedTwists.length;
+        await tester.pump(const Duration(milliseconds: 1000));
+        expect(fakeService.publishedTwists.length - before, lessThanOrEqualTo(2));
+      },
+    );
   });
 }

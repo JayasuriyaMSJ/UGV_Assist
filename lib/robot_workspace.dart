@@ -31,6 +31,7 @@ class _RobotWorkspacePageState extends State<RobotWorkspacePage> {
   late final bool _ownsService;
 
   int _currentTab = 0;
+  bool _controlTabMounted = false;
   String? _selectedVelocityTopic;
   String? _discoveryError;
 
@@ -157,16 +158,22 @@ class _RobotWorkspacePageState extends State<RobotWorkspacePage> {
               onReconnect: _connectAndDiscover,
               onRefresh: _refreshTopics,
             ),
-            RobotControlInfoTab(
-              robot: widget.robot,
-              apiService: widget.apiService,
-            ),
+            if (_controlTabMounted)
+              RobotControlInfoTab(
+                robot: widget.robot,
+                apiService: widget.apiService,
+              )
+            else
+              const SizedBox.shrink(),
           ],
         ),
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentTab,
-        onTap: (i) => setState(() => _currentTab = i),
+        onTap: (i) => setState(() {
+          _currentTab = i;
+          if (i == 2) _controlTabMounted = true;
+        }),
         backgroundColor: Colors.grey[850],
         selectedItemColor: const Color.fromARGB(255, 100, 140, 255),
         unselectedItemColor: Colors.white54,
@@ -182,11 +189,11 @@ class _RobotWorkspacePageState extends State<RobotWorkspacePage> {
             activeIcon: Icon(Icons.radar),
             label: 'Topics',
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.tune_outlined),
-            activeIcon: Icon(Icons.tune),
-            label: 'Control & Info',
-          ),
+          // BottomNavigationBarItem(
+          //   icon: Icon(Icons.tune_outlined),
+          //   activeIcon: Icon(Icons.tune),
+          //   label: 'Control & Info',
+          // ),
         ],
       ),
     );
@@ -233,8 +240,9 @@ class _RobotWorkspacePageState extends State<RobotWorkspacePage> {
                     IconButton(
                       tooltip: 'Refresh topics',
                       icon: const Icon(Icons.refresh, color: Colors.white70),
-                      onPressed:
-                          _service.isDiscoveringTopics ? null : _refreshTopics,
+                      onPressed: _service.isDiscoveringTopics
+                          ? null
+                          : _refreshTopics,
                     ),
                 ],
               ),
@@ -454,10 +462,8 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => _TopicInspectorSheet(
-        service: widget.service,
-        topic: topic,
-      ),
+      builder: (_) =>
+          _TopicInspectorSheet(service: widget.service, topic: topic),
     );
   }
 
@@ -506,17 +512,21 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'Search 300+ topics by name or type...',
-                    hintStyle:
-                        const TextStyle(color: Colors.white38, fontSize: 13),
-                    prefixIcon:
-                        const Icon(Icons.search, color: Colors.white38),
+                    hintStyle: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 13,
+                    ),
+                    prefixIcon: const Icon(Icons.search, color: Colors.white38),
                     suffixIcon: ValueListenableBuilder<String>(
                       valueListenable: _debouncedQuery,
-                      builder: (_, q, _) => q.isNotEmpty ||
-                              _searchController.text.isNotEmpty
+                      builder: (_, q, _) =>
+                          q.isNotEmpty || _searchController.text.isNotEmpty
                           ? IconButton(
-                              icon: const Icon(Icons.clear,
-                                  color: Colors.white54, size: 18),
+                              icon: const Icon(
+                                Icons.clear,
+                                color: Colors.white54,
+                                size: 18,
+                              ),
                               onPressed: _clearSearch,
                             )
                           : const SizedBox.shrink(),
@@ -559,24 +569,28 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
               final filtered = query.isEmpty
                   ? allTopics
                   : allTopics
-                      .where(
-                        (t) =>
-                            t.nameLower.contains(query) ||
-                            t.typeLower.contains(query),
-                      )
-                      .toList();
+                        .where(
+                          (t) =>
+                              t.nameLower.contains(query) ||
+                              t.typeLower.contains(query),
+                        )
+                        .toList();
 
               return Column(
                 children: [
                   Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 4,
+                    ),
                     child: Row(
                       children: [
                         Text(
                           '${filtered.length} of ${allTopics.length} topics',
                           style: const TextStyle(
-                              color: Colors.white38, fontSize: 11),
+                            color: Colors.white38,
+                            fontSize: 11,
+                          ),
                         ),
                         const Spacer(),
                         const Text(
@@ -600,7 +614,8 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
                             itemExtent: 74,
                             itemBuilder: (context, index) {
                               final topic = filtered[index];
-                              final isTwist = topic.type ==
+                              final isTwist =
+                                  topic.type ==
                                   RosbridgeService.twistMessageType;
                               final isHeavy = topic.isHeavy;
 
@@ -620,7 +635,8 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
                                       border: Border.all(
                                         color: isTwist
                                             ? _accentColor.withValues(
-                                                alpha: 0.6)
+                                                alpha: 0.6,
+                                              )
                                             : Colors.white12,
                                       ),
                                     ),
@@ -630,13 +646,13 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
                                           isTwist
                                               ? Icons.sports_esports_outlined
                                               : isHeavy
-                                                  ? Icons.data_array
-                                                  : Icons.sensors,
+                                              ? Icons.data_array
+                                              : Icons.sensors,
                                           color: isTwist
                                               ? Colors.lightBlueAccent
                                               : isHeavy
-                                                  ? Colors.orangeAccent
-                                                  : Colors.white54,
+                                              ? Colors.orangeAccent
+                                              : Colors.white54,
                                           size: 20,
                                         ),
                                         const SizedBox(width: 12),
@@ -676,8 +692,9 @@ class _TopicsExplorerTabState extends State<_TopicsExplorerTab> {
                                         ),
                                         if (isHeavy)
                                           Container(
-                                            margin:
-                                                const EdgeInsets.only(left: 6),
+                                            margin: const EdgeInsets.only(
+                                              left: 6,
+                                            ),
                                             padding: const EdgeInsets.symmetric(
                                               horizontal: 6,
                                               vertical: 2,
@@ -764,7 +781,10 @@ class _StatusBadge extends StatelessWidget {
             decoration: BoxDecoration(shape: BoxShape.circle, color: color),
           ),
           const SizedBox(width: 6),
-          Text(text, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+          Text(
+            text,
+            style: const TextStyle(color: Colors.white70, fontSize: 11),
+          ),
         ],
       ),
     );
@@ -776,10 +796,7 @@ class _TopicInspectorSheet extends StatefulWidget {
   final RosbridgeService service;
   final RosTopicInfo topic;
 
-  const _TopicInspectorSheet({
-    required this.service,
-    required this.topic,
-  });
+  const _TopicInspectorSheet({required this.service, required this.topic});
 
   @override
   State<_TopicInspectorSheet> createState() => _TopicInspectorSheetState();
@@ -823,7 +840,9 @@ class _TopicInspectorSheetState extends State<_TopicInspectorSheet> {
     // Skip if another fetch is already in-flight (either here or discoverTopics).
     if (_fetchingDetails ||
         !widget.service.isConnected ||
-        widget.service.hasInflightService) return;
+        widget.service.hasInflightService) {
+      return;
+    }
     _fetchingDetails = true;
     try {
       final details = await widget.service.getTopicDetails(widget.topic.name);
@@ -864,39 +883,39 @@ class _TopicInspectorSheetState extends State<_TopicInspectorSheet> {
     final isHeavy = widget.topic.isHeavy;
     _topicSub = widget.service
         .subscribeTopic(
-      widget.topic.name,
-      type: widget.topic.type,
-      throttleRateMs: isHeavy ? 1000 : 400,
-      queueLength: 1,
-      metadataOnly: isHeavy,
-    )
+          widget.topic.name,
+          type: widget.topic.type,
+          throttleRateMs: isHeavy ? 1000 : 400,
+          queueLength: 1,
+          metadataOnly: isHeavy,
+        )
         .listen((msg) {
-      if (_paused || !mounted) return;
+          if (_paused || !mounted) return;
 
-      final now = DateTime.now();
-      double? hz;
-      if (_prevReceived != null) {
-        final dtMs = now.difference(_prevReceived!).inMilliseconds;
-        if (dtMs > 0) {
-          hz = 1000.0 / dtMs;
-        }
-      }
+          final now = DateTime.now();
+          double? hz;
+          if (_prevReceived != null) {
+            final dtMs = now.difference(_prevReceived!).inMilliseconds;
+            if (dtMs > 0) {
+              hz = 1000.0 / dtMs;
+            }
+          }
 
-      setState(() {
-        _prevReceived = _lastReceived ?? now;
-        _lastReceived = now;
-        _estimatedHz = hz;
-        _sampleCount++;
-        _latestMessage = msg;
-      });
+          setState(() {
+            _prevReceived = _lastReceived ?? now;
+            _lastReceived = now;
+            _estimatedHz = hz;
+            _sampleCount++;
+            _latestMessage = msg;
+          });
 
-      // For heavy topics (camera/pointcloud/map), auto-unsubscribe after
-      // verifying publishing status so network & app stay fast.
-      if ((isHeavy || msg['_omitted'] == true) &&
-          _sampleCount >= _heavyAutoStopSamples) {
-        _stopSubscription();
-      }
-    });
+          // For heavy topics (camera/pointcloud/map), auto-unsubscribe after
+          // verifying publishing status so network & app stay fast.
+          if ((isHeavy || msg['_omitted'] == true) &&
+              _sampleCount >= _heavyAutoStopSamples) {
+            _stopSubscription();
+          }
+        });
   }
 
   Future<void> _stopSubscription() async {

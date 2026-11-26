@@ -79,7 +79,7 @@ class RosbridgeService extends ChangeNotifier {
   String? _errorMessage;
   RobotConfig? _activeRobot;
 
-  List<RosTopicInfo> _topics = [];
+  List<RosTopicInfo> _topics = const [];
   bool _isDiscoveringTopics = false;
 
   int _serviceCounter = 0;
@@ -93,7 +93,7 @@ class RosbridgeService extends ChangeNotifier {
   RobotConnectionState get state => _state;
   String? get errorMessage => _errorMessage;
   RobotConfig? get activeRobot => _activeRobot;
-  List<RosTopicInfo> get topics => List.unmodifiable(_topics);
+  List<RosTopicInfo> get topics => _topics;
   bool get isDiscoveringTopics => _isDiscoveringTopics;
   bool get isConnected => _state == RobotConnectionState.connected;
 
@@ -133,7 +133,7 @@ class RosbridgeService extends ChangeNotifier {
     _activeRobot = robot;
     _state = RobotConnectionState.connecting;
     _errorMessage = null;
-    _topics = [];
+    _topics = const [];
     notifyListeners();
 
     final uri = Uri.parse('ws://${robot.ip}:${robot.port}');
@@ -194,7 +194,7 @@ class RosbridgeService extends ChangeNotifier {
   Future<void> disconnect() async {
     await _closeSocketOnly();
     _activeRobot = null;
-    _topics = [];
+    _topics = const [];
     _isDiscoveringTopics = false;
     _state = RobotConnectionState.disconnected;
     _errorMessage = null;
@@ -410,7 +410,7 @@ class RosbridgeService extends ChangeNotifier {
         discovered.add(RosTopicInfo(name: name, type: type));
       }
       discovered.sort((a, b) => a.name.compareTo(b.name));
-      _topics = discovered;
+      _topics = List.unmodifiable(discovered);
       return discovered;
     } finally {
       _isDiscoveringTopics = false;

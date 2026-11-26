@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:amr_assist/models/robot_config.dart';
@@ -24,23 +23,28 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
   static const Color _accent = Color.fromARGB(255, 30, 63, 172);
 
   late RobotApiService _apiService;
+  late final bool _ownsApiService;
   bool _loading = true;
   String? _connectionError;
 
   SystemStats? _stats;
   List<DockerContainerInfo> _containers = [];
-  List<String> _mapFiles = [];
-  List<StartupContainerConfig> _startupContainers = [];
-  List<SensorCalibration> _sensors = [];
-  List<RobotPeerPose> _peers = [];
-
   bool _busyAction = false;
 
   @override
   void initState() {
     super.initState();
+    _ownsApiService = widget.apiService == null;
     _apiService = widget.apiService ?? RobotApiService(widget.robot);
-    _loadAll();
+    _loadOverview();
+  }
+
+  @override
+  void dispose() {
+    if (_ownsApiService) {
+      _apiService.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _editApiPort() async {
@@ -63,7 +67,7 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               labelText: 'HTTP API Port (${widget.robot.ip})',
-              hintText: 'e.g. 5000',
+              hintText: 'e.g. 5051',
               labelStyle: const TextStyle(color: Colors.white54, fontSize: 12),
               hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
               filled: true,
@@ -105,11 +109,11 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
     if (newPort == null || newPort == widget.robot.apiPort) return;
 
     widget.robot.apiPort = newPort;
-    if (widget.apiService == null) {
+    if (_ownsApiService) {
+      _apiService.dispose();
       _apiService = RobotApiService(widget.robot);
     }
 
-    // Persist updated apiPort in SharedPreferences
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('robots_list');
@@ -131,10 +135,10 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
       }
     } catch (_) {}
 
-    await _loadAll();
+    await _loadOverview();
   }
 
-  Future<void> _loadAll() async {
+  Future<void> _loadOverview() async {
     setState(() {
       _loading = true;
       _connectionError = null;
@@ -142,22 +146,14 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
 
     try {
       final stats = await _apiService.getSystemStats();
-      final results = await Future.wait([
-        _apiService.getDockerContainers().catchError((_) => <DockerContainerInfo>[]),
-        _apiService.listMapFiles().catchError((_) => <String>[]),
-        _apiService.getStartupContainers().catchError((_) => <StartupContainerConfig>[]),
-        _apiService.getSensors().catchError((_) => <SensorCalibration>[]),
-        _apiService.getRobotPlacement().catchError((_) => <RobotPeerPose>[]),
-      ]);
+      final containers = await _apiService
+          .getDockerContainers()
+          .catchError((_) => <DockerContainerInfo>[]);
 
       if (!mounted) return;
       setState(() {
         _stats = stats;
-        _containers = results[0] as List<DockerContainerInfo>;
-        _mapFiles = results[1] as List<String>;
-        _startupContainers = results[2] as List<StartupContainerConfig>;
-        _sensors = results[3] as List<SensorCalibration>;
-        _peers = results[4] as List<RobotPeerPose>;
+        _containers = containers;
         _loading = false;
       });
     } catch (e) {
@@ -194,7 +190,7 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
     }
   }
 
-  Future<void> _showContainerLogs(String name) async {
+  void _showContainerLogs(String name) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -245,149 +241,10 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
     }
   }
 
-  Future<void> _launchLocalization(String dbName) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _LocalizationProgressDialog(
-        apiService: _apiService,
-        dbName: dbName,
-      ),
-    );
-    await _loadAll();
-  }
-
-  Future<void> _editSensor(SensorCalibration sensor) async {
-    final xCtrl = TextEditingController(text: sensor.x);
-    final yCtrl = TextEditingController(text: sensor.y);
-    final zCtrl = TextEditingController(text: sensor.z);
-    final rCtrl = TextEditingController(text: sensor.roll);
-    final pCtrl = TextEditingController(text: sensor.pitch);
-    final yawCtrl = TextEditingController(text: sensor.yaw);
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.grey[850],
-        title: Text(
-          'Calibrate ${sensor.name}',
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _numField(xCtrl, 'X (m)'),
-              _numField(yCtrl, 'Y (m)'),
-              _numField(zCtrl, 'Z (m)'),
-              _numField(rCtrl, 'Roll (rad)'),
-              _numField(pCtrl, 'Pitch (rad)'),
-              _numField(yawCtrl, 'Yaw (rad)'),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: _accent),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (saved != true) return;
-
-    sensor.x = xCtrl.text.trim();
-    sensor.y = yCtrl.text.trim();
-    sensor.z = zCtrl.text.trim();
-    sensor.roll = rCtrl.text.trim();
-    sensor.pitch = pCtrl.text.trim();
-    sensor.yaw = yawCtrl.text.trim();
-
-    try {
-      await _apiService.updateSensor(sensor);
-      _showSnack('Updated ${sensor.name}');
-      setState(() {});
-    } catch (e) {
-      _showSnack('Failed to update sensor: $e', error: true);
-    }
-  }
-
-  Future<void> _editPeerPose(RobotPeerPose peer) async {
-    final xCtrl = TextEditingController(text: '${peer.x}');
-    final yCtrl = TextEditingController(text: '${peer.y}');
-    final yawCtrl = TextEditingController(text: '${peer.yawDeg}');
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.grey[850],
-        title: Text(
-          'Placement: ${peer.robotId}',
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _numField(xCtrl, 'X (m)'),
-            _numField(yCtrl, 'Y (m)'),
-            _numField(yawCtrl, 'Yaw (deg)'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: _accent),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (saved != true) return;
-
-    peer.x = double.tryParse(xCtrl.text.trim()) ?? peer.x;
-    peer.y = double.tryParse(yCtrl.text.trim()) ?? peer.y;
-    peer.yawDeg = double.tryParse(yawCtrl.text.trim()) ?? peer.yawDeg;
-
-    try {
-      await _apiService.updateRobotPeerPose(peer);
-      _showSnack('Updated placement for ${peer.robotId}');
-      setState(() {});
-    } catch (e) {
-      _showSnack('Failed to update placement: $e', error: true);
-    }
-  }
-
-  Widget _numField(TextEditingController c, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: TextField(
-        controller: c,
-        keyboardType: const TextInputType.numberWithOptions(
-          decimal: true,
-          signed: true,
-        ),
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(color: Colors.white54, fontSize: 12),
-          filled: true,
-          fillColor: Colors.grey[800],
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        ),
-      ),
+  void _openSubPage(Widget page) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => page),
     );
   }
 
@@ -419,7 +276,7 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
                 alignment: WrapAlignment.center,
                 children: [
                   ElevatedButton.icon(
-                    onPressed: _loadAll,
+                    onPressed: _loadOverview,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _accent,
                       foregroundColor: Colors.white,
@@ -445,7 +302,7 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
     }
 
     return RefreshIndicator(
-      onRefresh: _loadAll,
+      onRefresh: _loadOverview,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -486,11 +343,7 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
           const SizedBox(height: 12),
           _buildDockerCard(),
           const SizedBox(height: 12),
-          _buildMapLocalizationCard(),
-          const SizedBox(height: 12),
-          _buildSensorsCard(),
-          const SizedBox(height: 12),
-          _buildPlacementCard(),
+          _buildConfigPagesCard(),
         ],
       ),
     );
@@ -503,29 +356,35 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
       icon: Icons.memory_outlined,
       trailing: IconButton(
         icon: const Icon(Icons.refresh, color: Colors.white70, size: 20),
-        onPressed: _loadAll,
+        onPressed: _loadOverview,
       ),
       child: s == null
           ? const Text('No telemetry available',
               style: TextStyle(color: Colors.white54))
-          : Wrap(
-              spacing: 10,
-              runSpacing: 10,
+          : Row(
               children: [
-                _StatTile(
-                  label: 'CPU',
-                  value: '${s.cpuPercent.toStringAsFixed(1)}%',
-                  color: Colors.lightBlueAccent,
+                Expanded(
+                  child: _StatTile(
+                    label: 'CPU',
+                    value: '${s.cpuPercent.toStringAsFixed(1)}%',
+                    color: Colors.lightBlueAccent,
+                  ),
                 ),
-                _StatTile(
-                  label: 'RAM',
-                  value: '${s.ramPercent.toStringAsFixed(1)}%',
-                  color: Colors.orangeAccent,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _StatTile(
+                    label: 'RAM',
+                    value: '${s.ramPercent.toStringAsFixed(1)}%',
+                    color: Colors.orangeAccent,
+                  ),
                 ),
-                _StatTile(
-                  label: 'Disk Free',
-                  value: '${s.diskFreeGb.toStringAsFixed(1)} GB',
-                  color: Colors.greenAccent,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _StatTile(
+                    label: 'Disk Free',
+                    value: '${s.diskFreeGb.toStringAsFixed(1)} GB',
+                    color: Colors.greenAccent,
+                  ),
                 ),
               ],
             ),
@@ -536,87 +395,50 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
     return _SectionCard(
       title: 'Robot Stack Control',
       icon: Icons.layers_outlined,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ElevatedButton.icon(
-                onPressed: _busyAction
-                    ? null
-                    : () => _confirmAndRunStackAction('start'),
-                icon: const Icon(Icons.play_arrow, size: 18),
-                label: const Text('Start Stack'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
-                  foregroundColor: Colors.white,
-                ),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed:
+                  _busyAction ? null : () => _confirmAndRunStackAction('start'),
+              icon: const Icon(Icons.play_arrow, size: 18),
+              label: const Text('Start', overflow: TextOverflow.ellipsis),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green.shade700,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              ElevatedButton.icon(
-                onPressed: _busyAction
-                    ? null
-                    : () => _confirmAndRunStackAction('restart'),
-                icon: const Icon(Icons.restart_alt, size: 18),
-                label: const Text('Restart'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange.shade800,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-              ElevatedButton.icon(
-                onPressed: _busyAction
-                    ? null
-                    : () => _confirmAndRunStackAction('stop'),
-                icon: const Icon(Icons.stop, size: 18),
-                label: const Text('Stop Stack'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade800,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ],
+            ),
           ),
-          if (_startupContainers.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text(
-              'Startup Sequence (container_startup.yaml)',
-              style: TextStyle(color: Colors.white54, fontSize: 11),
-            ),
-            const SizedBox(height: 6),
-            ..._startupContainers.map(
-              (c) => SwitchListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  c.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                  ),
-                ),
-                subtitle: Text(
-                  'Order: ${c.order ?? "-"}  •  Wait: ${c.waitTime ?? 0}s',
-                  style: const TextStyle(color: Colors.white38, fontSize: 11),
-                ),
-                value: c.present,
-                activeThumbColor: Colors.lightBlueAccent,
-                onChanged: (val) async {
-                  setState(() => c.present = val);
-                  try {
-                    await _apiService.updateStartupContainers({
-                      c.name: c.toUpdatePayload(),
-                    });
-                    _showSnack('Updated ${c.name}');
-                  } catch (e) {
-                    _showSnack('Failed: $e', error: true);
-                  }
-                },
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: _busyAction
+                  ? null
+                  : () => _confirmAndRunStackAction('restart'),
+              icon: const Icon(Icons.restart_alt, size: 18),
+              label: const Text('Restart', overflow: TextOverflow.ellipsis),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange.shade800,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
               ),
             ),
-          ],
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed:
+                  _busyAction ? null : () => _confirmAndRunStackAction('stop'),
+              icon: const Icon(Icons.stop, size: 18),
+              label: const Text('Stop', overflow: TextOverflow.ellipsis),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade800,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -703,6 +525,52 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
     );
   }
 
+  Widget _buildConfigPagesCard() {
+    return _SectionCard(
+      title: 'Robot Configuration',
+      icon: Icons.settings_outlined,
+      child: Column(
+        children: [
+          _NavRow(
+            icon: Icons.playlist_play_outlined,
+            title: 'Startup Sequence',
+            subtitle: 'Enable/disable containers in container_startup.yaml',
+            onTap: () => _openSubPage(
+              StartupSequencePage(
+                robotName: widget.robot.name,
+                apiService: _apiService,
+              ),
+            ),
+          ),
+          const Divider(color: Colors.white12, height: 12),
+          _NavRow(
+            icon: Icons.sensors_outlined,
+            title: 'Sensor URDF Offsets',
+            subtitle: 'View and calibrate sensor xyz / rpy transforms',
+            onTap: () => _openSubPage(
+              SensorOffsetsPage(
+                robotName: widget.robot.name,
+                apiService: _apiService,
+              ),
+            ),
+          ),
+          const Divider(color: Colors.white12, height: 12),
+          _NavRow(
+            icon: Icons.grid_on_outlined,
+            title: 'Multi-Robot Placement',
+            subtitle: 'Configure peer x, y, yaw poses',
+            onTap: () => _openSubPage(
+              RobotPlacementPage(
+                robotName: widget.robot.name,
+                apiService: _apiService,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _miniBtn(String label, IconData icon, VoidCallback onTap) {
     return OutlinedButton.icon(
       onPressed: _busyAction ? null : onTap,
@@ -717,47 +585,379 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
       ),
     );
   }
+}
 
-  Widget _buildMapLocalizationCard() {
-    return _SectionCard(
-      title: 'Map DBs & Localization Mode',
-      icon: Icons.map_outlined,
-      child: _mapFiles.isEmpty
-          ? const Text('No map files found in /ros2_ws/db',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _mapFiles.map((file) {
-                return ActionChip(
-                  avatar: const Icon(Icons.my_location,
-                      size: 16, color: Colors.lightBlueAccent),
-                  label: Text(
-                    file,
+class _NavRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _NavRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: Colors.lightBlueAccent, size: 22),
+      title: Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(color: Colors.white54, fontSize: 11),
+      ),
+      trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+      onTap: onTap,
+    );
+  }
+}
+
+// ── Shared On-Demand Sub-Page Shell ──────────────────────────────────────────
+
+class _OnDemandSubPage<T> extends StatefulWidget {
+  final String title;
+  final Future<T> Function() loader;
+  final Widget Function(BuildContext context, T data, VoidCallback refresh)
+      builder;
+
+  const _OnDemandSubPage({
+    required this.title,
+    required this.loader,
+    required this.builder,
+  });
+
+  @override
+  State<_OnDemandSubPage<T>> createState() => _OnDemandSubPageState<T>();
+}
+
+class _OnDemandSubPageState<T> extends State<_OnDemandSubPage<T>> {
+  static const Color _accent = Color.fromARGB(255, 30, 63, 172);
+
+  bool _loading = true;
+  String? _error;
+  T? _data;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final result = await widget.loader();
+      if (!mounted) return;
+      setState(() {
+        _data = result;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[900],
+      appBar: AppBar(
+        backgroundColor: Colors.grey[900],
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white70),
+        title: Text(
+          widget.title,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 17,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white70),
+            onPressed: _load,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: _accent))
+            : _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                color: Colors.redAccent, fontSize: 13),
+                          ),
+                          const SizedBox(height: 12),
+                          ElevatedButton.icon(
+                            onPressed: _load,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _accent,
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: widget.builder(context, _data as T, _load),
+                  ),
+      ),
+    );
+  }
+}
+
+// ── Dedicated On-Demand Configuration Pages ──────────────────────────────────
+
+class StartupSequencePage extends StatelessWidget {
+  final String robotName;
+  final RobotApiService apiService;
+
+  const StartupSequencePage({
+    super.key,
+    required this.robotName,
+    required this.apiService,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _OnDemandSubPage<List<StartupContainerConfig>>(
+      title: '$robotName • Startup Sequence',
+      loader: apiService.getStartupContainers,
+      builder: (ctx, containers, refresh) {
+        if (containers.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.all(24),
+            children: const [
+              Center(
+                child: Text(
+                  'No startup containers found in container_startup.yaml',
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ],
+          );
+        }
+        return StatefulBuilder(
+          builder: (context, setLocalState) => ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: containers.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (_, i) {
+              final c = containers[i];
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.grey[850],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    c.name,
                     style: const TextStyle(
                       color: Colors.white,
                       fontFamily: 'monospace',
-                      fontSize: 12,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                  backgroundColor: Colors.grey[900],
-                  onPressed: () => _launchLocalization(file),
-                );
-              }).toList(),
-            ),
+                  subtitle: Text(
+                    'Order: ${c.order ?? "-"}  •  Wait: ${c.waitTime ?? 0}s',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                  value: c.present,
+                  activeThumbColor: Colors.lightBlueAccent,
+                  onChanged: (val) async {
+                    setLocalState(() => c.present = val);
+                    try {
+                      await apiService.updateStartupContainers({
+                        c.name: c.toUpdatePayload(),
+                      });
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Updated ${c.name}')),
+                        );
+                      }
+                    } catch (e) {
+                      setLocalState(() => c.present = !val);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: Colors.red.shade900,
+                            content: Text('Failed: $e'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
+}
 
-  Widget _buildSensorsCard() {
-    return _SectionCard(
-      title: 'Sensor URDF Offsets (${_sensors.length})',
-      icon: Icons.sensors_outlined,
-      child: _sensors.isEmpty
-          ? const Text('No sensors loaded from URDF',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              children: _sensors.map((s) {
-                return ListTile(
+class SensorOffsetsPage extends StatelessWidget {
+  final String robotName;
+  final RobotApiService apiService;
+
+  const SensorOffsetsPage({
+    super.key,
+    required this.robotName,
+    required this.apiService,
+  });
+
+  Future<void> _editSensor(
+    BuildContext context,
+    SensorCalibration sensor,
+    VoidCallback onSaved,
+  ) async {
+    final xCtrl = TextEditingController(text: sensor.x);
+    final yCtrl = TextEditingController(text: sensor.y);
+    final zCtrl = TextEditingController(text: sensor.z);
+    final rCtrl = TextEditingController(text: sensor.roll);
+    final pCtrl = TextEditingController(text: sensor.pitch);
+    final yawCtrl = TextEditingController(text: sensor.yaw);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.grey[850],
+        title: Text(
+          'Calibrate ${sensor.name}',
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _dialogNumField(xCtrl, 'X (m)'),
+              _dialogNumField(yCtrl, 'Y (m)'),
+              _dialogNumField(zCtrl, 'Z (m)'),
+              _dialogNumField(rCtrl, 'Roll (rad)'),
+              _dialogNumField(pCtrl, 'Pitch (rad)'),
+              _dialogNumField(yawCtrl, 'Yaw (rad)'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color.fromARGB(255, 30, 63, 172),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) return;
+
+    sensor.x = xCtrl.text.trim();
+    sensor.y = yCtrl.text.trim();
+    sensor.z = zCtrl.text.trim();
+    sensor.roll = rCtrl.text.trim();
+    sensor.pitch = pCtrl.text.trim();
+    sensor.yaw = yawCtrl.text.trim();
+
+    try {
+      await apiService.updateSensor(sensor);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Updated ${sensor.name}')),
+        );
+      }
+      onSaved();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red.shade900,
+            content: Text('Failed to update sensor: $e'),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _OnDemandSubPage<List<SensorCalibration>>(
+      title: '$robotName • Sensor Offsets',
+      loader: apiService.getSensors,
+      builder: (ctx, sensors, refresh) {
+        if (sensors.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.all(24),
+            children: const [
+              Center(
+                child: Text(
+                  'No sensors loaded from URDF',
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ],
+          );
+        }
+        return StatefulBuilder(
+          builder: (context, setLocalState) => ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: sensors.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (_, i) {
+              final s = sensors[i];
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.grey[850],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   title: Text(
@@ -766,10 +966,11 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
                       color: Colors.white,
                       fontFamily: 'monospace',
                       fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   subtitle: Text(
-                    'xyz: (${s.x}, ${s.y}, ${s.z})  rpy: (${s.roll}, ${s.pitch}, ${s.yaw})',
+                    'xyz: (${s.x}, ${s.y}, ${s.z})\nrpy: (${s.roll}, ${s.pitch}, ${s.yaw})',
                     style: const TextStyle(
                       color: Colors.white54,
                       fontFamily: 'monospace',
@@ -779,24 +980,131 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
                   trailing: IconButton(
                     icon: const Icon(Icons.edit_outlined,
                         color: Colors.white70, size: 18),
-                    onPressed: () => _editSensor(s),
+                    onPressed: () =>
+                        _editSensor(context, s, () => setLocalState(() {})),
                   ),
-                );
-              }).toList(),
-            ),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
+}
 
-  Widget _buildPlacementCard() {
-    return _SectionCard(
-      title: 'Multi-Robot Placement (${_peers.length})',
-      icon: Icons.grid_on_outlined,
-      child: _peers.isEmpty
-          ? const Text('No peer placement entries found',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              children: _peers.map((p) {
-                return ListTile(
+class RobotPlacementPage extends StatelessWidget {
+  final String robotName;
+  final RobotApiService apiService;
+
+  const RobotPlacementPage({
+    super.key,
+    required this.robotName,
+    required this.apiService,
+  });
+
+  Future<void> _editPeerPose(
+    BuildContext context,
+    RobotPeerPose peer,
+    VoidCallback onSaved,
+  ) async {
+    final xCtrl = TextEditingController(text: '${peer.x}');
+    final yCtrl = TextEditingController(text: '${peer.y}');
+    final yawCtrl = TextEditingController(text: '${peer.yawDeg}');
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.grey[850],
+        title: Text(
+          'Placement: ${peer.robotId}',
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogNumField(xCtrl, 'X (m)'),
+            _dialogNumField(yCtrl, 'Y (m)'),
+            _dialogNumField(yawCtrl, 'Yaw (deg)'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color.fromARGB(255, 30, 63, 172),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) return;
+
+    peer.x = double.tryParse(xCtrl.text.trim()) ?? peer.x;
+    peer.y = double.tryParse(yCtrl.text.trim()) ?? peer.y;
+    peer.yawDeg = double.tryParse(yawCtrl.text.trim()) ?? peer.yawDeg;
+
+    try {
+      await apiService.updateRobotPeerPose(peer);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Updated placement for ${peer.robotId}')),
+        );
+      }
+      onSaved();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red.shade900,
+            content: Text('Failed to update placement: $e'),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _OnDemandSubPage<List<RobotPeerPose>>(
+      title: '$robotName • Multi-Robot Placement',
+      loader: apiService.getRobotPlacement,
+      builder: (ctx, peers, refresh) {
+        if (peers.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.all(24),
+            children: const [
+              Center(
+                child: Text(
+                  'No peer placement entries found',
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ],
+          );
+        }
+        return StatefulBuilder(
+          builder: (context, setLocalState) => ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: peers.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (_, i) {
+              final p = peers[i];
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.grey[850],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   title: Text(
@@ -805,6 +1113,7 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
                       color: Colors.white,
                       fontFamily: 'monospace',
                       fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   subtitle: Text(
@@ -818,14 +1127,43 @@ class _RobotControlInfoTabState extends State<RobotControlInfoTab> {
                   trailing: IconButton(
                     icon: const Icon(Icons.edit_outlined,
                         color: Colors.white70, size: 18),
-                    onPressed: () => _editPeerPose(p),
+                    onPressed: () =>
+                        _editPeerPose(context, p, () => setLocalState(() {})),
                   ),
-                );
-              }).toList(),
-            ),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }
+
+Widget _dialogNumField(TextEditingController c, String label) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: TextField(
+      controller: c,
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: true,
+        signed: true,
+      ),
+      style: const TextStyle(color: Colors.white, fontSize: 14),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white54, fontSize: 12),
+        filled: true,
+        fillColor: Colors.grey[800],
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      ),
+    ),
+  );
+}
+
+// ── Shared UI Components ─────────────────────────────────────────────────────
 
 class _SectionCard extends StatelessWidget {
   final String title;
@@ -891,9 +1229,9 @@ class _StatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
@@ -908,7 +1246,7 @@ class _StatTile extends StatelessWidget {
             value,
             style: TextStyle(
               color: color,
-              fontSize: 16,
+              fontSize: 15,
               fontWeight: FontWeight.bold,
               fontFamily: 'monospace',
             ),
@@ -1001,104 +1339,6 @@ class _LogsSheetState extends State<_LogsSheet> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _LocalizationProgressDialog extends StatefulWidget {
-  final RobotApiService apiService;
-  final String dbName;
-
-  const _LocalizationProgressDialog({
-    required this.apiService,
-    required this.dbName,
-  });
-
-  @override
-  State<_LocalizationProgressDialog> createState() =>
-      _LocalizationProgressDialogState();
-}
-
-class _LocalizationProgressDialogState
-    extends State<_LocalizationProgressDialog> {
-  final List<LocalizationProgressEvent> _events = [];
-  bool _done = false;
-  StreamSubscription<LocalizationProgressEvent>? _sub;
-
-  @override
-  void initState() {
-    super.initState();
-    _sub = widget.apiService.startLocalizationMode(widget.dbName).listen(
-      (ev) {
-        if (!mounted) return;
-        setState(() {
-          _events.add(ev);
-          if (ev.status == 'success' || ev.status == 'error') _done = true;
-        });
-      },
-      onError: (e) {
-        if (!mounted) return;
-        setState(() {
-          _events.add(
-            LocalizationProgressEvent(status: 'error', message: '$e'),
-          );
-          _done = true;
-        });
-      },
-      onDone: () {
-        if (mounted) setState(() => _done = true);
-      },
-    );
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: Colors.grey[850],
-      title: Text(
-        'Localization: ${widget.dbName}',
-        style: const TextStyle(color: Colors.white, fontSize: 15),
-      ),
-      content: SizedBox(
-        width: 340,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!_done) const LinearProgressIndicator(),
-            const SizedBox(height: 10),
-            ..._events.map(
-              (e) => Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  '[${e.status}] ${e.message}',
-                  style: TextStyle(
-                    color: e.status == 'error'
-                        ? Colors.redAccent
-                        : e.status == 'success'
-                            ? Colors.greenAccent
-                            : Colors.white70,
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _done ? () => Navigator.pop(context) : null,
-          child: const Text('Close'),
-        ),
-      ],
     );
   }
 }
